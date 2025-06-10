@@ -1,21 +1,16 @@
 import requests
 import json
 import gradio as gr
+from PIL import Image
+import torch
+from transformers import CLIPProcessor, CLIPModel
 
-# ---------- Shared Helpers ----------
+# ---------- Load CLIP Model ----------
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+# ---------- IGDB POST Helper ----------
 def igdb_post(endpoint: str, client_id: str, access_token: str, query: str):
-    """
-    Helper function to make a POST request to the IGDB API.
-
-    Args:
-        endpoint (str): The IGDB API endpoint (e.g., "games", "characters").
-        client_id (str): Twitch Client ID.
-        access_token (str): IGDB access token.
-        query (str): IGDB query string.
-
-    Returns:
-        dict | list: The response from the IGDB API, or an error dict.
-    """
     url = f"https://api.igdb.com/v4/{endpoint}"
     headers = {
         "Client-ID": client_id,
@@ -30,17 +25,6 @@ def igdb_post(endpoint: str, client_id: str, access_token: str, query: str):
 
 # ---------- Token Retrieval ----------
 def get_igdb_access_token(client_id: str, client_secret: str) -> str:
-    """
-    Retrieves an access token from Twitch to authenticate with IGDB.
-
-    Args:
-        client_id (str): Twitch Client ID.
-        client_secret (str): Twitch Client Secret.
-
-    Returns:
-        str: IGDB access token or an error message.
-    """
-
     url = "https://id.twitch.tv/oauth2/token"
     params = {
         'client_id': client_id,
@@ -54,64 +38,20 @@ def get_igdb_access_token(client_id: str, client_secret: str) -> str:
     except Exception as e:
         return f"❌ Error: {e}"
 
-# ---------- Lookup Resolvers ----------
+# ---------- Lookup Helpers ----------
 def resolve_lookup(client_id: str, access_token: str, category: str, lookup_id: int) -> str:
-    """
-    Resolves an ID into a human-readable name from a specific IGDB category.
-
-    Args:
-        client_id (str): Twitch Client ID.
-        access_token (str): IGDB access token.
-        category (str): The IGDB category (e.g., "character_genders").
-        lookup_id (int): The ID to resolve.
-
-    Returns:
-        str: Resolved name or original ID as string.
-    """
     query = f"fields name; where id = {lookup_id}; limit 1;"
     result = igdb_post(category, client_id, access_token, query)
     return result[0]["name"] if result and isinstance(result, list) else str(lookup_id)
 
 def get_gender_name(client_id: str, access_token: str, gender_id: int) -> str:
-    """
-    Fetches the name of a character's gender.
-
-    Args:
-        client_id (str): Twitch Client ID.
-        access_token (str): IGDB access token.
-        gender_id (int): Gender ID.
-
-    Returns:
-        str: Gender name.
-    """
     return resolve_lookup(client_id, access_token, "character_genders", gender_id)
 
 def get_species_name(client_id: str, access_token: str, species_id: int) -> str:
-    """
-    Fetches the name of a character's species.
-
-    Args:
-        client_id (str): Twitch Client ID.
-        access_token (str): IGDB access token.
-        species_id (int): Species ID.
-
-    Returns:
-        str: Species name.
-    """
     return resolve_lookup(client_id, access_token, "character_species", species_id)
 
-# ---------- Character Fetching ----------
+# ---------- Character Data ----------
 def get_igdb_characters(client_id: str, access_token: str) -> str:
-    """
-    Retrieves a basic list of IGDB characters.
-
-    Args:
-        client_id (str): Twitch Client ID.
-        access_token (str): IGDB access token.
-
-    Returns:
-        str: Formatted string of characters or error message.
-    """
     query = "fields id, name, gender, species, description; limit 10;"
     result = igdb_post("characters", client_id, access_token, query)
     if isinstance(result, dict) and "error" in result:
@@ -120,38 +60,13 @@ def get_igdb_characters(client_id: str, access_token: str) -> str:
         f"{c['id']}: {c['name']}\n{c.get('description', '')}" for c in result
     ]) or "No characters found."
 
-# ---------- Game Search ----------
+# ---------- Game & Characters ----------
 def search_game_by_name(client_id: str, access_token: str, name: str):
-    """
-    Searches for a game by name using the IGDB API.
-
-    Args:
-        client_id (str): Twitch Client ID.
-        access_token (str): IGDB access token.
-        name (str): Name of the game to search.
-
-    Returns:
-        dict | None: Game info dictionary or None if not found.
-    """
     query = f'search "{name}"; fields id, name, summary, url; limit 1;'
     result = igdb_post("games", client_id, access_token, query)
-    if isinstance(result, list) and result:
-        return result[0]
-    return None
+    return result[0] if isinstance(result, list) and result else None
 
-# ---------- Characters for Game ----------
 def get_characters_for_game(client_id: str, access_token: str, game_name: str) -> str:
-    """
-    Retrieves characters for a specific game by name.
-
-    Args:
-        client_id (str): Twitch Client ID.
-        access_token (str): IGDB access token.
-        game_name (str): Name of the game.
-
-    Returns:
-        str: Formatted character details or error message.
-    """
     game = search_game_by_name(client_id, access_token, game_name)
     if not game:
         return f"❌ Game not found: {game_name}"
@@ -172,6 +87,27 @@ def get_characters_for_game(client_id: str, access_token: str, game_name: str) -
             desc = desc[:200] + "..."
         output.append(f"🧍 {char['name']}\n  Gender: {gender} | Species: {species}\n  {desc}\n")
     return "\n".join(output)
+
+# ---------- Curated Characters ----------
+ICONIC_CHARACTERS = [
+    "Mario", "Luigi", "Peach", "Yoshi", "Bowser",
+    "Link", "Zelda", "Ganondorf", "Samus Aran", "Kirby",
+    "Pikachu", "Donkey Kong", "Sonic the Hedgehog", "Shadow the Hedgehog",
+    "Master Chief", "Lara Croft", "Kratos", "Cloud Strife", "Sephiroth",
+    "Solid Snake", "Mega Man", "Ryu", "Chun-Li", "Gordon Freeman",
+    "Geralt of Rivia", "Nathan Drake", "Ellie", "Joel", "Arthur Morgan"
+]
+
+def get_character_label_list(client_id: str, access_token: str, limit: int = 0) -> list:
+    return ICONIC_CHARACTERS
+
+def identify_top_characters(image: Image.Image, labels: list, top_k=3) -> list:
+    inputs = clip_processor(text=labels, images=image, return_tensors="pt", padding=True)
+    outputs = clip_model(**inputs)
+    logits_per_image = outputs.logits_per_image
+    probs = logits_per_image.softmax(dim=1)
+    top_probs, top_idxs = torch.topk(probs, top_k)
+    return [(labels[i], round(prob.item(), 3)) for i, prob in zip(top_idxs[0], top_probs[0])]
 
 # ---------- Gradio Interface ----------
 with gr.Blocks(title="IGDB MCP Tool") as app:
@@ -201,6 +137,21 @@ with gr.Blocks(title="IGDB MCP Tool") as app:
         game_btn = gr.Button("Search & Fetch Characters")
         game_output = gr.Textbox(label="Game Character Info", lines=16)
         game_btn.click(get_characters_for_game, [game_cid, game_token, game_name], game_output)
+
+    with gr.Tab("🖼 Identify Character from Image"):
+        with gr.Row():
+            img_client_id = gr.Textbox(label="Client ID")
+            img_token = gr.Textbox(label="Access Token", type="password")
+        image_input = gr.Image(type="pil", label="Upload Character Image")
+        result_output = gr.Textbox(label="Character Match", lines=6)
+        image_button = gr.Button("Identify Character")
+
+        def handle_image_upload(image, client_id, access_token):
+            labels = get_character_label_list(client_id, access_token)
+            top_matches = identify_top_characters(image, labels, top_k=3)
+            return "\n".join([f"🎯 {name} ({prob * 100:.1f}%)" for name, prob in top_matches])
+
+        image_button.click(fn=handle_image_upload, inputs=[image_input, img_client_id, img_token], outputs=result_output)
 
 if __name__ == "__main__":
     app.launch(mcp_server=True)
