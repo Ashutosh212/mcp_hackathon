@@ -60,9 +60,9 @@ def get_igdb_characters(client_id: str, access_token: str) -> str:
         f"{c['id']}: {c['name']}\n{c.get('description', '')}" for c in result
     ]) or "No characters found."
 
-# ---------- Game & Characters ----------
+# ---------- Game & Characters with Extras ----------
 def search_game_by_name(client_id: str, access_token: str, name: str):
-    query = f'search "{name}"; fields id, name, summary, url; limit 1;'
+    query = f'search "{name}"; fields id, name, summary, url, involved_companies.company.name, platforms.name, time_to_beat.*; limit 1;'
     result = igdb_post("games", client_id, access_token, query)
     return result[0] if isinstance(result, list) and result else None
 
@@ -71,6 +71,11 @@ def get_characters_for_game(client_id: str, access_token: str, game_name: str) -
     if not game:
         return f"❌ Game not found: {game_name}"
 
+    companies = ", ".join(c['company']['name'] for c in game.get('involved_companies', []) if c.get('company'))
+    platforms = ", ".join(p['name'] for p in game.get('platforms', []) if p.get('name'))
+    ttb = game.get('time_to_beat', {})
+    ttb_str = ", ".join([f"{k.replace('_', ' ').title()}: {v} mins" for k, v in ttb.items()]) if ttb else "No data"
+
     query = f"fields name, description, gender, species, url; where games = ({game['id']}); limit 500;"
     characters = igdb_post("characters", client_id, access_token, query)
     if isinstance(characters, dict) and "error" in characters:
@@ -78,7 +83,13 @@ def get_characters_for_game(client_id: str, access_token: str, game_name: str) -
     if not characters:
         return f"No characters found for '{game['name']}'."
 
-    output = [f"🎮 Game: {game['name']} (ID: {game['id']})\nURL: {game.get('url', '')}\n"]
+    output = [
+        f"🎮 Game: {game['name']} (ID: {game['id']})\nURL: {game.get('url', '')}",
+        f"🏢 Company: {companies or 'N/A'}",
+        f"🕹 Platform(s): {platforms or 'N/A'}",
+        f"⏱ Time to Beat: {ttb_str}\n"
+    ]
+
     for char in characters:
         gender = get_gender_name(client_id, access_token, char.get("gender")) if char.get("gender") else "N/A"
         species = get_species_name(client_id, access_token, char.get("species")) if char.get("species") else "N/A"
